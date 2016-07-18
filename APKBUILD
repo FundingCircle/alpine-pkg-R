@@ -1,69 +1,117 @@
-# Contributor: Sasha Gerrand <alpine-pkg-R@sgerrand.com>
-# Maintainer: Sasha Gerrand <alpine-pkg-R@sgerrand.com>
+# Contributor: Nirosan <pnirosan@gmail.com>
+# Contributor: Jakub Jirutka <jakub@jirutka.cz>
+# Maintainer: Jakub Jirutka <jakub@jirutka.cz>
 pkgname=R
-pkgver=3.2.5
+pkgver=3.3.1
 pkgrel=0
-pkgdesc="R is a system for statistical computation and graphics"
+pkgdesc="Language and environment for statistical computing"
 url="https://www.r-project.org"
-arch="all"
-license="GPL2"
+arch="x86_64 x86"
+license="GPL-2 GPL-3 LGPL-2.1"
 depends=""
-depends_dev="pcre-dev perl readline-dev"
-makedepends="$depends_dev autoconf automake gfortran"
-install=""
-subpackages="$pkgname-dev $pkgname-doc"
-source="https://cran.rstudio.com/src/base/$pkgname-${pkgver:0:1}/$pkgname-$pkgver.tar.gz
-        10-glibc-disable-stack-end.patch"
+depends_dev="gcc gfortran icu-dev libjpeg-turbo libpng-dev make openblas-dev
+	pcre-dev>=8.10 readline-dev xz-dev zlib-dev
+	"
+makedepends="$depends_dev bzip2-dev cairo-dev curl-dev>=7.28 libxmu-dev
+	openjdk8-jre-base pango-dev perl tiff-dev tk-dev
+	"
+install="$pkgname.post-install"
+subpackages="
+	$pkgname-mathlib
+	$pkgname-mathlib-dev:mathlib_dev
+	$pkgname-dev
+	$pkgname-doc
+	"
+source="https://cran.r-project.org/src/base/R-${pkgver%%.*}/$pkgname-$pkgver.tar.gz"
+builddir="$srcdir/$pkgname-$pkgver"
 
-_builddir="$srcdir/$pkgname-$pkgver"
-
-prepare() {
-	cd "$_builddir"
-	for i in $source; do
-		case $i in
-		*.patch)
-			msg "Applying ${i}"; patch -p2 -i "$srcdir/$i" || return 1;;
-		esac
-	done
-}
+_rhome="usr/lib/R"
+ldpath="/$_rhome/lib"
 
 build() {
-	cd "$_builddir"
-	./configure \
-		--build=$CBUILD \
-		--host=$CHOST \
+	cd "$builddir"
+
+	# CXXFLAGS is propagated to /etc/R/Makeconf that is read when building
+	# additional R modules. -D__MUSL__ is needed for some modules like Rcpp.
+	# htps://github.com/RcppCore/Rcpp/issues/448
+	CXXFLAGS="$CXXFLAGS -D__MUSL__" ./configure \
 		--prefix=/usr \
-		--sysconfdir=/etc \
-		--mandir=/usr/share/man \
+		--sysconfdir=/etc/R \
 		--localstatedir=/var \
-		--disable-java \
-		--without-x \
+		--mandir=/usr/share/man \
+		--libdir=/usr/lib \
+		rdocdir=/usr/share/doc/R \
+		rincludedir=/usr/include/R \
+		rsharedir=/usr/share/R \
+		--disable-nls \
+		--enable-R-shlib \
+		--enable-java \
+		--without-recommended-packages \
+		--with-blas=openblas \
+		--with-cairo \
+		--with-ICU \
+		--with-jpeglib \
+		--with-lapack \
+		--with-libpng \
+		--with-libtiff \
+		--with-tcltk \
+		--with-x \
 		|| return 1
 	make || return 1
+
+	cd src/nmath/standalone
+	make shared
 }
 
 package() {
-	cd "$_builddir"
+	local destdir="$pkgdir/$_rhome"
+
+	cd "$builddir"
+
 	make DESTDIR="$pkgdir" install || return 1
+
+	# Install libRmath.so.
+	cd src/nmath/standalone
+	make DESTDIR="$pkgdir" install || return 1
+	cd -
+
+	# Fixup R wrapper script (taken from Arch).
+	rm "$destdir"/bin/R
+	ln -sf /usr/bin/R "$destdir"/bin/R
+
+	# Remove some useless files (COPYING is duplicated, it will be
+	# in -doc, don't worry).
+	rm "$destdir"/COPYING "$destdir"/SVN-REVISION
+
+	mkdir -p "$pkgdir"/etc/R
+
+	# R apparently ignores --sysconfdir, so we must manually move configs
+	# to /etc/R and make symlinks.
+	cd "$destdir"/etc || return 1
+	local f; for f in *; do
+		mv "$f" "$pkgdir"/etc/R/ && ln -sf /etc/R/$f $f || return 1
+	done
+	cd -
 }
 
-dev() {
-	default_dev || return 1
+mathlib() {
+	pkgdesc="$pkgdesc (libRmath)"
+
+	install -D "$pkgdir"/usr/lib/libRmath.so \
+		"$subpkgdir"/usr/lib/libRmath.so
 }
 
-doc() {
-	default_doc || return 1
-	cd "$srcdir/$pkgname-$pkgver"
-	_docs="COPYING INSTALL README"
-	for _doc in $_docs; do
-		install -Dm644 "$srcdir/$pkgname-$pkgver/$_doc" \
-			"$subpkgdir/usr/share/doc/$pkgname/$_doc" || return 1
+mathlib_dev() {
+	pkgdesc="$pkgdesc (libRmath, development files)"
+	depends="$pkgname-mathlib"
+
+	local path
+	for path in usr/lib/libRmath.so usr/lib/pkgconfig/libRmath.pc; do
+		mkdir -p "$subpkgdir"/$(dirname $path)
+		mv "$pkgdir"/$path "$subpkgdir"/$path || return 1
 	done
 }
 
-md5sums="7b23ee70cfb383be3bd4360e3c71d8c3  R-3.2.5.tar.gz
-4368a6983cf584d666c51aa61d680209  10-glibc-disable-stack-end.patch"
-sha256sums="60745672dce5ddc201806fa59f6d4e0ba6554d8ed78d0f9f0d79a629978f80b5  R-3.2.5.tar.gz
-26a00af590550a19d6a2c3e21ce932de6722300d1dd18729bdfa16b57da23242  10-glibc-disable-stack-end.patch"
-sha512sums="aff7efa84188dfdd486d48095fadb9fbe1ab5897f9f924b9956d21d955d7cba9e50c1d21af6cca8327af8d1465b10761526a3a3be357c08a536831e7f5fc290b  R-3.2.5.tar.gz
-a1b3d9ad70dc77a649f0b56e1080e2f833e7eba23408ee710d372bfde06eb651418c78f640554743666c812eb0d268e0db48b2cbf038481c9ede46e4d4f43c3e  10-glibc-disable-stack-end.patch"
+md5sums="f50a659738b73036e2f5635adbd229c5  R-3.3.1.tar.gz"
+sha256sums="3dc59ae5831f5380f83c169bac2103ad052efe0ecec4ffa74bde4d85a0fda9e2  R-3.3.1.tar.gz"
+sha512sums="d0ff85e99b9ec9cac672aa30d7d1a854778c6a610bcc5336e8c60c8c74f20856f2bfeae085af793fad646ff45cb4677d9d6dcbaa18212591f72f00a02339f4cd  R-3.3.1.tar.gz"
